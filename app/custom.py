@@ -100,7 +100,7 @@ async def find_text_and_download_media(bot, message):
     # create a download progress file
     os.makedirs(progress_folder := "{}/progress".format(os.getenv('DATA_FOLDER')), exist_ok=True)
     media_progress_file = "{}/{}-{}.json".format(progress_folder, media_channel_id, message.id)
-    progress_data = {"last_update": time.time(), "percent": 0, "file_path": media_path, "cancelled": False, "id": None}
+    progress_data = {"last_update": time.time(), "percent": 0, "file_paths": [], "cancelled": False, "id": None}
     open(media_progress_file, "w").write(json.dumps(progress_data))
 
     media = []
@@ -181,12 +181,13 @@ async def find_text_and_download_media(bot, message):
                 await bot.download_media(m, media_path, progress_callback=progress_callback)
                 # show it's completed
                 await bot.edit_message(progress_message, "Downloading from TG... 100%")
-                open(media_progress_file, "w").write(json.dumps(progress_data))
 
             # store path to file in array
             if os.path.exists(media_path):
                 media_paths.append(media_path)
 
+    progress_data['file_paths'] = media_paths
+    open(media_progress_file, "w").write(json.dumps(progress_data))
     return text, media_paths
 
 
