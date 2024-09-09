@@ -25,7 +25,7 @@ for package in (silence_packages := (
 bot = TelegramClient('bot', int(os.getenv('TELEGRAM_APP_ID')), os.getenv('TELEGRAM_APP_HASH')).start(bot_token=os.getenv('TELEGRAM_BOT_TOKEN'))
 
 
-@bot.on(events.NewMessage)
+@bot.on(events.NewMessage(pattern='.*'))
 async def echo(event):
     user_input = event.text
     # skip if bot or no one sent a command
@@ -116,40 +116,43 @@ async def echo(event):
             user_name = get_name_from_user(event.message.from_user)
             record_path = "{}/posts/tweet_{}_{}.json".format(os.getenv('DATA_FOLDER'), chat_id, message_id)
 
-        # get text, switch to caption if media is attached
-        try:
-            text, media_path = await find_text_and_download_media(bot, reply_to_message or event.message)
-        except Exception as e:
-            if os.path.exists(media_progress_file):
-                os.remove(media_progress_file)
-            if "Cancelled" in str(e):
-                logging.debug("Cancelled media download")
-                return
-            logging.error(e)
-            if "File is too big" in str(e):
-                return await event.reply("Error: file is too big for X")
-            elif "Video is too long" in str(e):
-                return await event.reply("Error: video is too long for X")
+        media_paths = []
+        if (reply_to_message and reply_to_message.media) or (event.message and event.message.media):
+            # get text, switch to caption if media is attached
+            try:
+                text, media_paths = await find_text_and_download_media(bot, reply_to_message or event.message)
+            except Exception as e:
+                if os.path.exists(media_progress_file):
+                    os.remove(media_progress_file)
+                if "Cancelled" in str(e):
+                    logging.debug("Cancelled media download")
+                    return
+                logging.error(e)
+                if "File is too big" in str(e):
+                    return await event.reply("Error: file is too big for X")
+                elif "Video is too long" in str(e):
+                    return await event.reply("Error: video is too long for X")
+                else:
+                    return await event.reply("Error: unknown TG download error")
             else:
-                return await event.reply("Error: unknown TG download error")
+                logging.info("{} ({}) Downloaded file(s): {}".format(user_name, user_id, media_paths))
+                media_progress = json.loads(open(media_progress_file, "r").read())
+                if media_progress['id']:
+                    await bot.edit_message(channel_id, media_progress['id'], "Uploading to X...")
+                else:
+                    progress_message = await event.reply("Uploading to X...")
+                    media_progress['id'] = progress_message.id
+                    open(media_progress_file, "w").write(json.dumps(media_progress))
         else:
-            logging.info("{} ({}) Downloaded file: {}".format(user_name, user_id, media_path))
-            media_progress = json.loads(open(media_progress_file, "r").read())
-            if media_progress['id']:
-                await bot.edit_message(channel_id, media_progress['id'], "Uploading to X...")
-            else:
-                progress_message = await event.reply("Uploading to X...")
-                media_progress['id'] = progress_message.id
-                open(media_progress_file, "w").write(json.dumps(media_progress))
-
+            text = reply_to_message.message or event.message.message
         text = text.replace(user_input[0], '').strip() if text else ''
 
         # check if tweet is empty
-        if len(user_input) == 1 and not media_path and not text:
+        if len(user_input) == 1 and not media_paths and not text:
             return await event.reply("Not enough parameters")
         # upload media
         try:
-            media_id = await upload_media(media_path) if media_path else None
+            media_ids = await upload_media(media_paths) if media_paths else None
         except Exception as e:
             logging.error(e)
             if "maxFileSizeExceeded" in str(e):
@@ -157,19 +160,19 @@ async def echo(event):
             else:
                 return await event.reply("Error: unknown X upload error")
         else:
-            if media_id:
-                logging.info("{} ({}) Uploaded file: {}".format(user_name, user_id, media_path))
-            elif media_id is False:
-                logging.info("{} ({}) Failed to uploaded file: {}".format(user_name, user_id, media_path))
+            if media_ids:
+                logging.info("{} ({}) Uploaded file(s): {}".format(user_name, user_id, media_paths))
+            elif media_ids is False:
+                logging.info("{} ({}) Failed to uploaded file(s): {}".format(user_name, user_id, media_paths))
         finally:
             if os.path.exists(media_progress_file):
                 media_progress = json.loads(open(media_progress_file, "r").read())
                 await bot.delete_messages(channel_id, media_progress['id'])
                 os.remove(media_progress_file)
 
-        # send tweet
         try:
-            post = await create_tweet(text, [media_id] if media_id else None)
+            # send tweet
+            post = await create_tweet(text, media_ids)
         except Exception as e:
             logging.error(e)
             if "include either text or media" in str(e):
